@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zaman Bank AI Assistant - Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .chat-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .user-message {
+            background: #e3f2fd;
+            text-align: right;
+        }
+        .bot-message {
+            background: #f5f5f5;
+            text-align: left;
+        }
+        .input-area {
+            display: flex;
+            gap: 10px;
+        }
+        input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #2e7d32;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #1b5e20;
+        }
+        .voice-btn {
+            background: #d32f2f;
+        }
+        .voice-btn:hover {
+            background: #b71c1c;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <h1>Zaman Bank AI Assistant</h1>
+        <div class="messages" id="messages"></div>
+
+        <div class="input-area">
+            <input type="text" id="messageInput" placeholder="Введите ваше сообщение..." onkeypress="handleKeyPress(event)">
+            <button onclick="sendMessage()">Отправить</button>
+            <button class="voice-btn" onclick="startVoiceRecording()">🎤 Голос</button>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <button onclick="testSpendingAnalysis()">Тест анализа расходов</button>
+            <button onclick="testProductRecommendation()">Тест рекомендаций</button>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            addMessage(message, 'user');
+            input.value = '';
+
+            try {
+                const response = await fetch(`${API_BASE}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        history: [] // Можно добавить историю сообщений
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.response) {
+                    addMessage(data.response, 'bot');
+                } else {
+                    addMessage('Ошибка: ' + data.error, 'bot');
+                }
+
+            } catch (error) {
+                addMessage('Ошибка соединения: ' + error, 'bot');
+            }
+        }
+
+        async function startVoiceRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const mediaRecorder = new MediaRecorder(stream);
+                const audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    await sendVoiceMessage(audioBlob);
+                    stream.getTracks().forEach(track => track.stop());
+                };
+
+                mediaRecorder.start();
+                addMessage('🎤 Запись началась... Говорите!', 'bot');
+
+                // Останавливаем запись через 5 секунд
+                setTimeout(() => {
+                    mediaRecorder.stop();
+                    addMessage('🎤 Запись завершена, обрабатываю...', 'bot');
+                }, 5000);
+
+            } catch (error) {
+                addMessage('Ошибка доступа к микрофону: ' + error, 'bot');
+            }
+        }
+
+        async function sendVoiceMessage(audioBlob) {
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.wav');
+
+            try {
+                const response = await fetch(`${API_BASE}/voice-chat`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.user_text) {
+                    addMessage(`Вы: ${data.user_text}`, 'user');
+                }
+
+                if (data.response_text) {
+                    addMessage(data.response_text, 'bot');
+                }
+
+                if (data.voice_url) {
+                    // Воспроизводим голосовой ответ
+                    const audio = new Audio(`${API_BASE}${data.voice_url}`);
+                    audio.play();
+                }
+
+            } catch (error) {
+                addMessage('Ошибка отправки голоса: ' + error, 'bot');
+            }
+        }
+
+        async function testSpendingAnalysis() {
+            const testTransactions = [
+                "Продукты: 50000 тенге",
+                "Транспорт: 15000 тенге",
+                "Развлечения: 30000 тенге",
+                "Коммунальные услуги: 25000 тенге"
+            ];
+
+            try {
+                const response = await fetch(`${API_BASE}/analyze-spending`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        transactions: testTransactions
+                    })
+                });
+
+                const data = await response.json();
+                addMessage(`Анализ расходов: ${data.analysis}`, 'bot');
+
+            } catch (error) {
+                addMessage('Ошибка анализа: ' + error, 'bot');
+            }
+        }
+
+        async function testProductRecommendation() {
+            const testProfile = {
+                age: 30,
+                income: 300000,
+                goals: ["квартира", "автомобиль"]
+            };
+
+            try {
+                const response = await fetch(`${API_BASE}/recommend-products`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        profile: testProfile
+                    })
+                });
+
+                const data = await response.json();
+                addMessage(`Рекомендации: ${data.recommendations}`, 'bot');
+
+            } catch (error) {
+                addMessage('Ошибка рекомендаций: ' + error, 'bot');
+            }
+        }
+
+        function addMessage(text, sender) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.textContent = text;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+    </script>
+</body>
+</html>
