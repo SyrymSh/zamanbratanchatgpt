@@ -162,6 +162,20 @@
             transition: all 0.3s;
         }
 
+        .speak-btn {
+            background: none;
+            border: none;
+            font-size: 16px;
+            cursor: pointer;
+            margin-left: 10px;
+            padding: 5px;
+            border-radius: 50%;
+            transition: background 0.3s;
+        }
+
+        .speak-btn:hover {
+            background: rgba(0, 123, 255, 0.1);
+        }
         .quick-btn:hover {
             background: #007bff;
             color: white;
@@ -236,7 +250,7 @@
         </div>
     </div>
 
-    <script>
+     <script>
         const chatContainer = document.getElementById('chatContainer');
         const messageInput = document.getElementById('messageInput');
         const sendBtn = document.getElementById('sendBtn');
@@ -246,8 +260,73 @@
         let mediaRecorder;
         let audioChunks = [];
         let isRecording = false;
+        let currentAudioFile = null;
+        let lastBotMessage = '';
 
-        // Отправка сообщения
+        // Функция для воспроизведения аудио с сервера
+        function playAudio(filename) {
+            if (filename) {
+                const audio = new Audio(`/api/audio/${filename}`);
+                audio.play().catch(e => {
+                    console.log('Audio play failed:', e);
+                    // Запасной вариант: Web Speech API
+                    speakText(lastBotMessage);
+                });
+            } else {
+                // Используем Web Speech API если нет файла
+                speakText(lastBotMessage);
+            }
+        }
+
+        // Функция для воспроизведения текста как речи (Web Speech API)
+        function speakText(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ru-RU';
+                utterance.rate = 0.9;
+                utterance.pitch = 1;
+
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        // Обновленная функция addMessage
+        function addMessage(text, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+
+            if (sender === 'bot') {
+                lastBotMessage = text;
+
+                const speakButton = document.createElement('button');
+                speakButton.innerHTML = '🔊';
+                speakButton.className = 'speak-btn';
+                speakButton.title = 'Озвучить ответ';
+
+                speakButton.onclick = function() {
+                    playAudio(currentAudioFile);
+                };
+
+                const textContent = document.createElement('span');
+                textContent.innerHTML = text.replace(/\n/g, '<br>');
+
+                bubble.appendChild(textContent);
+                bubble.appendChild(speakButton);
+            } else {
+                bubble.innerHTML = text.replace(/\n/g, '<br>');
+            }
+
+            messageDiv.appendChild(bubble);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // Отправка текстового сообщения
         async function sendMessage() {
             const message = messageInput.value.trim();
             if (!message) return;
@@ -273,6 +352,13 @@
                 }
 
                 addMessage(data.response, 'bot');
+
+                // Автоматически воспроизводим аудио если есть
+                if (data.audio_filename) {
+                    currentAudioFile = data.audio_filename;
+                    setTimeout(() => playAudio(data.audio_filename), 500);
+                }
+
             } catch (error) {
                 hideTypingIndicator();
                 addMessage('Извините, произошла ошибка. Пожалуйста, попробуйте еще раз.', 'bot');
@@ -289,74 +375,59 @@
         });
 
         async function startRecording() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                sampleRate: 16000,
-                channelCount: 1,
-                echoCancellation: true
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true
+                    }
+                });
+
+                // Пробуем разные MIME types
+                const options = {
+                    audioBitsPerSecond: 128000,
+                    mimeType: 'audio/webm;codecs=opus'
+                };
+
+                // Если webm не поддерживается, пробуем wav
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                    options.mimeType = 'audio/wav';
+                }
+
+                mediaRecorder = new MediaRecorder(stream, options);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const mimeType = mediaRecorder.mimeType || 'audio/webm';
+                    const audioBlob = new Blob(audioChunks, { type: mimeType });
+                    await sendVoiceMessage(audioBlob, mimeType);
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                voiceBtn.classList.add('recording');
+                voiceBtn.innerHTML = '⏹️';
+
+                // Автоматически останавливаем запись через 5 секунд
+                setTimeout(() => {
+                    if (isRecording) {
+                        stopRecording();
+                    }
+                }, 5000);
+
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                addMessage('Не удалось получить доступ к микрофону. Проверьте разрешения.', 'bot');
             }
-        });
-        mediaRecorder = new MediaRecorder(stream, {
-            mimeType: 'audio/webm;codecs=opus'
-        });
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-                audioChunks.push(event.data);
-            }
-        };
-
-        mediaRecorder.onstop = async () => {
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-            await sendVoiceMessage(audioBlob);
-        };
-
-        mediaRecorder.start(1000); // Записываем chunks каждую секунду
-        isRecording = true;
-        voiceBtn.classList.add('recording');
-        voiceBtn.innerHTML = '⏹️';
-    } catch (error) {
-        console.error('Error accessing microphone:', error);
-        addMessage('Не удалось получить доступ к микрофону. Проверьте разрешения.', 'bot');
-    }
-}
-
-async function sendVoiceMessage(audioBlob) {
-    showTypingIndicator();
-
-    const formData = new FormData();
-    formData.append('audio', audioBlob, 'voice_message.webm');
-
-    try {
-        const response = await fetch('/api/voice-chat', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const data = await response.json();
-        hideTypingIndicator();
-
-        if (data.transcribed_text) {
-            addMessage(data.transcribed_text, 'user');
-        }
-
-        if (data.expense_analysis) {
-            showExpenseAnalysis(data.expense_analysis);
-        }
-
-        addMessage(data.response, 'bot');
-    } catch (error) {
-        hideTypingIndicator();
-        console.error('Voice message error:', error);
-        addMessage('Ошибка обработки голосового сообщения. Попробуйте еще раз или используйте текст.', 'bot');
-    }
-}
         function stopRecording() {
             if (mediaRecorder && isRecording) {
                 mediaRecorder.stop();
@@ -369,11 +440,12 @@ async function sendVoiceMessage(audioBlob) {
             }
         }
 
-        async function sendVoiceMessage(audioBlob) {
+        async function sendVoiceMessage(audioBlob, mimeType) {
             showTypingIndicator();
 
             const formData = new FormData();
-            formData.append('audio', audioBlob);
+            const fileExtension = mimeType.includes('webm') ? 'webm' : 'wav';
+            formData.append('audio', audioBlob, `voice.${fileExtension}`);
 
             try {
                 const response = await fetch('/api/voice-chat', {
@@ -381,11 +453,15 @@ async function sendVoiceMessage(audioBlob) {
                     body: formData
                 });
 
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
                 const data = await response.json();
                 hideTypingIndicator();
 
                 if (data.transcribed_text) {
-                    addMessage(data.transcribed_text, 'user');
+                    addMessage(`🎤 ${data.transcribed_text}`, 'user');
                 }
 
                 if (data.expense_analysis) {
@@ -393,24 +469,18 @@ async function sendVoiceMessage(audioBlob) {
                 }
 
                 addMessage(data.response, 'bot');
+
+                // Автоматически воспроизводим аудио если есть
+                if (data.audio_filename) {
+                    currentAudioFile = data.audio_filename;
+                    setTimeout(() => playAudio(data.audio_filename), 500);
+                }
+
             } catch (error) {
                 hideTypingIndicator();
-                addMessage('Ошибка обработки голосового сообщения', 'bot');
+                console.error('Voice message error:', error);
+                addMessage('Ошибка обработки голосового сообщения. Попробуйте еще раз или используйте текст.', 'bot');
             }
-        }
-
-        // Вспомогательные функции
-        function addMessage(text, sender) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${sender}`;
-
-            const bubble = document.createElement('div');
-            bubble.className = 'message-bubble';
-            bubble.innerHTML = text.replace(/\n/g, '<br>');
-
-            messageDiv.appendChild(bubble);
-            chatContainer.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
         function showTypingIndicator() {

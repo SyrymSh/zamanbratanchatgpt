@@ -4,6 +4,9 @@ import json
 from datetime import datetime
 import os
 import tempfile
+from flask import send_file
+import base64
+from db.users import get_user_by_id
 
 app = Flask(__name__)
 
@@ -13,7 +16,7 @@ HEADERS = {
     "Authorization": "Bearer sk-roG3OusRr0TLCHAADks6lw",
     "Content-Type": "application/json"
 }
-
+user_id = 1
 # Данные о продуктах банка
 products_data = {
     "retail": [
@@ -81,22 +84,7 @@ products_data = {
 }
 
 # Данные пользователя
-user_data = {
-    "age": 30,
-    "income": 500000,
-    "expenses": {
-        "food": 80000,
-        "transport": 25000,
-        "entertainment": 30000,
-        "shopping": 45000,
-        "bills": 60000
-    },
-    "savings": 200000,
-    "goals": [
-        {"name": "Квартира", "target": 15000000, "current": 500000, "timeline": 60},
-        {"name": "Путешествие", "target": 500000, "current": 100000, "timeline": 12}
-    ]
-}
+user_data = get_user_by_id(user_id)
 
 
 def analyze_expenses(user_data):
@@ -222,9 +210,9 @@ def chat():
         return '', 200
 
     data = request.json
-    message = data.get('message', '')
+    message = data.get('message', '').lower()
 
-    # Анализ текущих расходов (только для контекста AI)
+    # Анализ текущих расходов
     expense_analysis = analyze_expenses(user_data)
 
     context = {
@@ -234,9 +222,20 @@ def chat():
 
     response = get_ai_response(message, context)
 
+    # Показываем анализ только если запрос связан с финансами
+    finance_keywords = ['расход', 'доход', 'сбережен', 'бюджет', 'трат', 'финанс', 'деньг', 'экономи', 'копить']
+    show_analysis = any(keyword in message for keyword in finance_keywords)
+
+    # Генерируем аудио ответ
+    audio_file_path = text_to_speech(response)
+    audio_filename = None
+    if audio_file_path:
+        audio_filename = os.path.basename(audio_file_path)
+
     return jsonify({
         "response": response,
-        "expense_analysis": None  # Не возвращаем анализ фронтенду
+        "expense_analysis": expense_analysis if show_analysis else None,
+        "audio_filename": audio_filename
     })
 
 
@@ -316,15 +315,74 @@ def voice_chat():
     # Получение ответа от AI
     response_text = get_ai_response(text_message, context)
 
-    # Показываем анализ только если запрос связан с финансами (как в chat())
+    # Показываем анализ только если запрос связан с финансами
     finance_keywords = ['расход', 'доход', 'сбережен', 'бюджет', 'трат', 'финанс', 'деньг', 'экономи', 'копить']
     show_analysis = any(keyword in text_message.lower() for keyword in finance_keywords)
+
+    # Генерируем аудио ответ
+    audio_file_path = text_to_speech(response_text)
+    audio_filename = None
+    if audio_file_path:
+        audio_filename = os.path.basename(audio_file_path)
 
     return jsonify({
         "transcribed_text": text_message,
         "response": response_text,
-        "expense_analysis": expense_analysis if show_analysis else None
+        "expense_analysis": expense_analysis if show_analysis else None,
+        "audio_filename": audio_filename
     })
+
+def text_to_speech_openai(text):
+    """Конвертация текста в речь используя OpenAI TTS API"""
+    try:
+        url = "https://openai-hub.neuraldeep.tech/v1/audio/speech"
+        headers = {
+            "Authorization": "Bearer sk-roG3OusRr0TLCHAADks6lw",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": "tts-1",
+            "input": text[:4096],  # Ограничиваем длину текста
+            "voice": "alloy",
+            "response_format": "mp3"
+        }
+
+        print(f"Sending TTS request for text: {text[:100]}...")
+        response = requests.post(url, headers=headers, json=data, timeout=30)
+
+        if response.status_code == 200:
+            # Сохраняем аудио во временный файл
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+                tmp_file.write(response.content)
+                print(f"TTS audio saved to: {tmp_file.name}")
+                return tmp_file.name
+        else:
+            print(f"TTS API error: {response.status_code} - {response.text}")
+            return None
+
+    except Exception as e:
+        print(f"Error in OpenAI TTS: {e}")
+        return None
+
+
+def text_to_speech(text):
+    """Конвертация текста в речь (используем OpenAI TTS)"""
+    return text_to_speech_openai(text)
+
+@app.route('/api/audio/<filename>')
+def serve_audio(filename):
+    """Отдача аудио файлов"""
+    try:
+        audio_path = os.path.join(tempfile.gettempdir(), filename)
+        if os.path.exists(audio_path):
+            return send_file(audio_path, as_attachment=False, mimetype='audio/mp3')
+        else:
+            return "Audio not found", 404
+    except Exception as e:
+        print(f"Error serving audio: {e}")
+        return "Error", 500
+
 
 @app.route('/api/analyze-expenses', methods=['GET'])
 def get_expense_analysis():
